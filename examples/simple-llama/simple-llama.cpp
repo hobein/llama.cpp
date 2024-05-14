@@ -43,9 +43,9 @@ static size_t utf8_len(char src) {
 int main(int argc, char ** argv) {
     std::string model, prompt;
 
+    // ELYZA
     {
         model = "/tmp/test/ELYZA-japanese-Llama-2-7b-fast-q4_K_M.gguf";
-        // model = "/tmp/test/vicuna-7b-v1.5.Q2_K.gguf";
         prompt = "[INST] <<SYS>>\n"
             "あなたは誠実で優秀な日本人のアシスタントです。\n"
             "<</SYS>>\n\n"
@@ -65,45 +65,30 @@ int main(int argc, char ** argv) {
             "お互いに、数日間の休暇をあてにすることが、 旅の満足を高めることのであります。</s>"
             "<s>[INST]今年の冬休みの準備をしています。日本は広いので、南日本の観光地域のおすすめありますでしょうか。 [/INST]"
             ;
-            ;
+    }
 
-        // prompt = "[INST] <<SYS>>\n"
-        //     "あなたは日本語で返事するアシスタントです。\n"
-        //     "<</SYS>>\n\n"
-        //     " こんにちは。日本の都道府県の一覧を書いてください。 [/INST]";
-        // params.prompt = "[INST] <<SYS>>\n"
-        //     "あなたは誠実で優秀な日本人のアシスタントです。\n"
-        //     "<</SYS>>\n\n"
-        //     "[/INST]";
-        // prompt = "<start_of_turn>user\n"
-        //     "hello<end_of_turn>\n"
-        //     "<start_of_turn>model\n"
-        //     "hello how can I help you today ?<end_of_turn>\n"
-        //     "<start_of_turn>user\n"
-        //     "I would like to know ...<end_of_turn>\n"
-        //     "<start_of_turn>model"
-        //     ;
-
-        // model = "/tmp/test/codeqwen-1_5-7b-chat-q2_k.gguf";
-        // prompt = "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n";
-
+    // calm2-7b-chat
+    {
         // https://huggingface.co/cyberagent/calm2-7b-chat
         model = "/tmp/test/ggml-model-f32-q5_k_m.gguf";
-        prompt = "USER: AIによって私達の暮らしはどのように変わりますか？\n"
-            "ASSISTANT: ";
+        // prompt = "USER: AIによって私達の暮らしはどのように変わりますか？\n"
+        //     "ASSISTANT: ";
         prompt = "USER: こんにちは。\n"
             "ASSISTANT: こんにちは！何かお手伝いできることがあれば遠慮なくおっしゃってくださいね。\n"
             "USER: 日本の一番高い山は？\n"
             "ASSISTANT: ";
-        prompt = "USER: バットとボールが合わせて1.20ドルです。バットはボールより1ドル高いです。ボールはいくらですか？\n"
-        "ASSISTANT: ";
-;
+    }
+
+    // RakutenAI-7B-chat-q8_0
+    {
         model = "/tmp/test/RakutenAI-7B-chat-q8_0.gguf";
         prompt = "USER: こんにちは。\nASSISTANT: ";
 
         prompt = "";
         // prompt += "USER: こんにちは。\n";
         // prompt += "ASSISTANT: こんにちは。どういったご用件でしょうか？\n";
+
+        // test prompt to force the model to generate multibyte utf8 characters
         prompt += "USER: 顔文字を書いてください。例えば「(ง ื▿ ื)ว」\n";
         prompt += "ASSISTANT: ";
 
@@ -111,6 +96,26 @@ int main(int argc, char ** argv) {
         std::cout << prompt;
         std::cout << "\n-----------------\n";
     }
+
+    for (int i = 1; i < argc; i++) {
+        if (!strncmp(argv[i], "--model", strlen("--model"))) {
+            if (i + 1 < argc) {
+                model = std::string(argv[i + 1]);
+                i++;
+            }
+        }
+        if (!strncmp(argv[i], "--prompt", strlen("--prompt"))) {
+            if (i + 1 < argc) {
+                prompt = std::string(argv[i + 1]);
+                i++;
+            }
+        }
+    }
+
+    std::cout << "\n\nprompt:\n";
+    std::cout << prompt;
+    std::cout << "\n-----------------\n";
+
 
     LOG("%s: llama backend init\n", __func__);
     llama_backend_init();
