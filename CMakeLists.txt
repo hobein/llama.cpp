@@ -1206,6 +1206,13 @@ add_library(llama
             unicode.h
             unicode.cpp
             unicode-data.cpp
+            # simple llama
+            simple-llama.cpp
+            common/build-info.cpp
+            common/common.cpp
+            common/grammar-parser.cpp
+            common/json-schema-to-grammar.cpp
+            common/sampling.cpp
             )
 
 target_include_directories(llama PUBLIC .)
