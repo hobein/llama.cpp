@@ -143,13 +143,42 @@ int main(int argc, char ** argv) {
         goto cleanup;
     }
 
-    status = simple_llama_set_prompt(sllm, inference_state, prompt.c_str());
+    if (true) {
+        std::vector<simple_llama_chat_message_t> messages;
+        simple_llama_chat_message_t cm;
+        cm.role = SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_USER;
+        cm.content = "顔文字を書いてください。例えば「(°〆°#)」か「(`益′)ว」";
+        // cm.content = "最もシンプルなアスキーアートを書いてください";
+        messages.push_back(cm);
+
+        // cm.role = SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_ASSISTANT;
+        // // cm.content = "（・∀・）つ";
+        // cm.content = "どういうテーマのアートですか？";
+        // messages.push_back(cm);
+
+        // cm.role = SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_USER;
+        // // cm.content = "ascii artで牛を書いてください";
+        // cm.content = "人はテーマです。";
+        // messages.push_back(cm);
+
+        status = simple_llama_set_prompt_from_messages(
+            sllm,
+            inference_state,
+            messages.data(),
+            messages.size(),
+            SIMPLE_LLAMA_CHAT_MESSAGE_FORMAT_RAKUTEN_AI_CHAT
+        );
+    } else {
+        status = simple_llama_set_prompt(sllm, inference_state, prompt.c_str());
+    }
+
+
     if (status != SIMPLE_LLAMA_STATUS_SUCCESS) {
         std::cout << "error: simple_llama_set_prompt: " << status << std::endl;
         goto cleanup;
     }
 
-    simple_llama_inference_status inference_status;
+    simple_llama_inference_status_t inference_status;
 
     std::cout << "size of char: " << sizeof(char) << std::endl;
     std::cout << "input prompt token count " << simple_llama_inference_state_get_input_prompt_token_count(sllm, inference_state) << std::endl;
@@ -180,11 +209,12 @@ int main(int argc, char ** argv) {
         // We can check the length of the character using utf8_len.
         // If the result is greater than n_tokens we should wait before yielding
         // the token.
-
-        if (std::string(result.data(), result.size()) == "\n") {
-            // for AI Rakuten
-            inference_status = SIMPLE_LLAMA_INFERENCE_STATUS_DONE;
-        } else {
+        std::string tmp = std::string(result.data(), result.size());
+        // if (std::string(result.data(), result.size()) == "\n") {
+        //     // for AI Rakuten
+        //     inference_status = SIMPLE_LLAMA_INFERENCE_STATUS_DONE;
+        // } else 
+        {
             std::cout << "generated token (#" << n_tokens << ")'" << std::string(result.data(), result.size()) << "'" << std::endl;
             std::cout << "utf8_len() => " << utf8_len(result[0]) << std::endl;
             for (size_t i = 0; i < result.size(); i++) {
