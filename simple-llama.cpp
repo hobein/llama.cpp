@@ -1,9 +1,33 @@
+#include <array>
+#include <sstream>
+#include <sstream>
 #include <vector>
+#include <tuple>
+#include <utility>
 
 #include "simple-llama.h"
 #include "common/common.h"
 
-static std::tuple<struct llama_model *, struct llama_context *, simple_llama_status> simple_llama_init_from_gpt_params(gpt_params & params);
+static std::tuple<struct llama_model *, struct llama_context *, simple_llama_status_t> simple_llama_init_from_gpt_params(gpt_params & params);
+static std::string format_rakuten_ai_chat(
+    const simple_llama_chat_message_t* messages, // array of message
+    size_t length
+);
+static std::vector<std::pair<std::string, std::string>> _map_roles(
+    const simple_llama_chat_message_t* messages,
+    size_t length,
+    std::map<simple_llama_chat_message_role_t, std::string> _role_map
+);
+static std::string format_llama2(
+    const simple_llama_chat_message_t* messages, // array of message
+    size_t length
+);
+static std::string _format_llama2(
+    const std::string& system_message,
+    const std::vector<std::pair<std::string, std::string>>& _messages,
+    const std::string& sep,
+    const std::string& sep2
+);
 
 struct simple_llama {
     gpt_params params;
@@ -31,7 +55,7 @@ struct simple_llama* simple_llama_new() {
     return simple_llm;
 }
 
-simple_llama_status simple_llama_init_model(struct simple_llama* simple_llm, const char* model_file) {
+simple_llama_status_t simple_llama_init_model(struct simple_llama* simple_llm, const char* model_file) {
     // forced settings
     simple_llm->params.logits_all = false;
     simple_llm->params.embedding = false;
@@ -52,7 +76,7 @@ simple_llama_status simple_llama_init_model(struct simple_llama* simple_llm, con
 
     simple_llm->params.model = model_file;
 
-    simple_llama_status status;
+    simple_llama_status_t status;
     std::tie(simple_llm->model, simple_llm->ctx, status) = simple_llama_init_from_gpt_params(simple_llm->params);
 
     return status;
@@ -97,10 +121,12 @@ void simple_llama_inference_state_free(struct simple_llama_inference_state* stat
     delete state;
 }
 
-simple_llama_status simple_llama_set_prompt(struct simple_llama* simple_llm, struct simple_llama_inference_state* state, const char* prompt) {
+simple_llama_status_t simple_llama_set_prompt(struct simple_llama* simple_llm, struct simple_llama_inference_state* state, const char* prompt) {
     if ((prompt == nullptr) || strlen(prompt) == 0) {
         return SIMPLE_LLAMA_STATUS_EMPTY_PROMPT;
     }
+
+    std::cout << "\nsimple_llama_set_prompt:\n'" << prompt << "'" << std::endl;
 
     if (state->ctx_sampling == nullptr) {
         state->ctx_sampling = llama_sampling_init(simple_llm->params.sparams);
@@ -109,6 +135,7 @@ simple_llama_status simple_llama_set_prompt(struct simple_llama* simple_llm, str
         }
     } else {
         // reset the context sampling
+        std::cout << "simple_llama_set_prompt: llama_sampling_reset" << std::endl;
         llama_sampling_reset(state->ctx_sampling);
     }
 
@@ -126,15 +153,41 @@ simple_llama_status simple_llama_set_prompt(struct simple_llama* simple_llm, str
         return SIMPLE_LLAMA_STATUS_PROMPT_TOO_LONG;
     }
 
-
     return SIMPLE_LLAMA_STATUS_SUCCESS;
+}
+
+simple_llama_status_t simple_llama_set_prompt_from_messages(
+    struct simple_llama* simple_llm,
+    struct simple_llama_inference_state* state,
+    const simple_llama_chat_message_t* messages, // array of message
+    size_t length,
+    simple_llama_chat_message_format_t format
+) {
+    if (length == 0) {
+        return SIMPLE_LLAMA_STATUS_EMPTY_PROMPT;
+    }
+
+    std::string prompt;
+
+    switch (format) {
+    case SIMPLE_LLAMA_CHAT_MESSAGE_FORMAT_RAKUTEN_AI_CHAT:
+        prompt = format_rakuten_ai_chat(messages, length);
+        break;
+    case SIMPLE_LLAMA_CHAT_MESSAGE_FORMAT_LLAMA2_CHAT:
+        prompt = format_llama2(messages, length);
+        break;
+    default:
+        return SIMPLE_LLAMA_STATUS_PROMPT_UNKNOWN_FORMAT;
+    }
+
+    return simple_llama_set_prompt(simple_llm, state, prompt.c_str());
 }
 
 int simple_llama_inference_state_get_input_prompt_token_count(struct simple_llama*, struct simple_llama_inference_state* state) {
     return state->embd_inp.size();
 }
 
-simple_llama_inference_status simple_llama_inference_state_get_next_token(struct simple_llama* simple_llm, struct simple_llama_inference_state* state, llama_token* generated_token) {
+simple_llama_inference_status_t simple_llama_inference_state_get_next_token(struct simple_llama* simple_llm, struct simple_llama_inference_state* state, llama_token* generated_token) {
     *generated_token = -1;
 
     if (state->n_remain == 0) {
@@ -225,7 +278,7 @@ int32_t simple_llama_token_to_piece(struct simple_llama* simple_llm, llama_token
     return llama_token_to_piece(simple_llm->model, token, buf, length, true);
 }
 
-static std::tuple<struct llama_model *, struct llama_context *, simple_llama_status> simple_llama_init_from_gpt_params(gpt_params & params) {
+static std::tuple<struct llama_model *, struct llama_context *, simple_llama_status_t> simple_llama_init_from_gpt_params(gpt_params & params) {
     auto mparams = llama_model_params_from_gpt_params(params);
 
     llama_model * model = nullptr;
@@ -279,4 +332,128 @@ static std::tuple<struct llama_model *, struct llama_context *, simple_llama_sta
     }
 
     return std::make_tuple(model, lctx, SIMPLE_LLAMA_STATUS_SUCCESS);
+}
+
+
+static std::string format_rakuten_ai_chat(
+    const simple_llama_chat_message_t* messages, // array of message
+    size_t length
+) {
+    std::ostringstream prompt;
+    simple_llama_chat_message_role_t last_role = SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_ASSISTANT;
+
+    for (size_t i = 0; i < length; i++) {
+        const simple_llama_chat_message_t* item = &messages[i];
+
+        switch (item->role) {
+        case SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_SYSTEM:
+            //skip
+            break;
+        case SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_USER:
+            prompt << "USER: " << item->content << '\n';
+            last_role = item->role;
+            break;
+        case SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_ASSISTANT:
+            prompt << "ASSISTANT: " << item->content << '\n';
+            last_role = item->role;
+            break;
+        }
+    }
+
+    if (last_role == SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_USER) {
+        prompt << "ASSISTANT: ";
+    } else if (last_role == SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_ASSISTANT) {
+        prompt << "USER: ";
+    }
+
+    return prompt.str();
+}
+
+static std::string format_llama2(
+    const simple_llama_chat_message_t* messages, // array of message
+    size_t length
+) {
+    // see https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/tokenization_llama.py
+    // system prompt is "embedded" in the first message
+    std::map<simple_llama_chat_message_role_t, std::string> _roles = {
+        {SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_USER, "<s>[INST]"},
+        {SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_ASSISTANT, "[/INST]"}
+    };
+    auto _messages = _map_roles(messages, length, _roles);
+    std::string system_message = "";
+
+    for (size_t i = 0; i < length; i++) {
+        const simple_llama_chat_message_t* item = &messages[i];
+        if (item->role == SIMPLE_LLAMA_CHAT_MESSAGE_ROLE_SYSTEM) {
+            system_message = item->content;
+            break;
+        }
+    }
+
+    if (!system_message.empty()) {
+        system_message = "<s>[INST] <<SYS>>\n" + system_message + "\n<</SYS>>";
+    }
+
+    return _format_llama2(system_message, _messages, " ", "</s>") + "[/INST]";
+}
+
+static std::vector<std::pair<std::string, std::string>> _map_roles(
+    const simple_llama_chat_message_t* messages,
+    size_t length,
+    std::map<simple_llama_chat_message_role_t, std::string> _role_map
+) {
+    std::vector<std::pair<std::string, std::string>> output = {};
+
+    for (size_t i = 0; i < length; i++) {
+        const simple_llama_chat_message_t* item = &messages[i];
+        auto it = _role_map.find(item->role);
+
+        if (it != _role_map.end()) {
+            output.push_back({it->second, item->content});
+        }
+    }
+
+    return output;
+}
+
+/*
+def _format_llama2(
+    system_message: str, messages: List[Tuple[str, Optional[str]]], sep: str, sep2: str
+) -> str:
+    """Format the prompt with the llama2 style."""
+    seps = [sep, sep2]
+    ret = system_message + sep
+    for i, (role, message) in enumerate(messages):
+        if system_message and i == 0:
+            m = message or ""
+            ret += m + seps[i % 2]
+        elif message:
+            ret += role + message + " " + seps[i % 2]
+        else:
+            ret += role + " "
+    return ret
+*/
+static std::string _format_llama2(
+    const std::string& system_message,
+    const std::vector<std::pair<std::string, std::string>>& _messages,
+    const std::string& sep,
+    const std::string& sep2
+) {
+    std::array<std::string, 2> seps = {sep, sep2};
+    std::string ret = system_message + sep;
+
+    for (size_t i = 0; i < _messages.size(); i++) {
+        const std::string& role = _messages[i].first;
+        const std::string& message = _messages[i].second;
+
+        if (!system_message.empty() && i == 0) {
+            ret += message + seps[i % 2];
+        } else if (!message.empty()) {
+            ret += role + message + " " + seps[i % 2];
+        } else {
+            ret += role + " ";
+        }
+    }
+
+    return ret;
 }
