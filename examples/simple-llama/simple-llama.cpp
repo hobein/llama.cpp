@@ -122,6 +122,7 @@ int main(int argc, char ** argv) {
     llama_numa_init(GGML_NUMA_STRATEGY_DISABLED);
 
     struct simple_llama* sllm = simple_llama_new();
+    struct simple_llama_inference_state* inference_state = nullptr;
 
     if (sllm == NULL) {
         std::cout << "error: simple_llama_new" << std::endl;
@@ -131,64 +132,77 @@ int main(int argc, char ** argv) {
     std::string acc = "";
 
     auto status = simple_llama_init_model(sllm, model.c_str());
-    if (status == SIMPLE_LLAMA_STATUS_SUCCESS) {
-        struct simple_llama_inference_state* inference_state = simple_llama_inference_state_new();
-
-        if (inference_state != NULL) {
-            status = simple_llama_set_prompt(sllm, inference_state, prompt.c_str());
-            if (status == SIMPLE_LLAMA_STATUS_SUCCESS) {
-                simple_llama_inference_status inference_status;
-
-                std::cout << "size of char: " << sizeof(char) << std::endl;
-                std::cout << "input prompt token count " << simple_llama_inference_state_get_input_prompt_token_count(sllm, inference_state) << std::endl;
-                do {
-                    llama_token token;
-                    inference_status = simple_llama_inference_state_get_next_token(sllm, inference_state, &token);      /// <<<< spawn 6threads
-                    // std::cout << "inference_status: " << inference_status << std::endl;
-                    if (inference_status == SIMPLE_LLAMA_INFERENCE_STATUS_SUCCESS) {
-                        std::vector<char> result(8, 0);
-                        int n_tokens = simple_llama_token_to_piece(sllm, token, result.data(), result.size());
-                        if (n_tokens < 0) {
-                            result.resize(-n_tokens);
-                            n_tokens = simple_llama_token_to_piece(sllm, token, result.data(), result.size());
-                            if (n_tokens < 0) {
-                                // This should not happen
-                                std::cerr << "simple_llama_token_to_piece returned an error." << std::endl;
-                                return 1;
-                            }
-                        } else {
-                            result.resize(n_tokens);
-                        }
-
-                        if (std::string(result.data(), result.size()) == "\n") {
-                            // for AI Rakuten
-                            inference_status = SIMPLE_LLAMA_INFERENCE_STATUS_DONE;
-                        } else {
-                            std::cout << "generated token (#" << n_tokens << ")'" << std::string(result.data(), result.size()) << "'" << std::endl;
-                            std::cout << "utf8_len() => " << utf8_len(result[0]) << std::endl;
-                            for (int i = 0; i < result.size(); i++) {
-                                printf("%02X ", (uint8_t)(result[i]));
-                            }
-                            printf("\n");
-                            acc += std::string(result.data(), result.size());
-                            std::cout << "acc: " << acc << "\n\n" << std::endl;
-                        }
-                    }
-                } while(inference_status == SIMPLE_LLAMA_INFERENCE_STATUS_SUCCESS);
-
-            simple_llama_inference_state_free(inference_state);
-        } else {
-            std::cout << "error: simple_llama_inference_state_new" << std::endl;
-        }
-        } else {
-            std::cout << "error: simple_llama_set_prompt: " << status << std::endl;
-        }
-    } else {
+    if (status != SIMPLE_LLAMA_STATUS_SUCCESS) {
         std::cout << "error: simple_llama_init_model: " << status << std::endl;
+        goto cleanup;
     }
+
+    inference_state = simple_llama_inference_state_new();
+    if (inference_state == NULL) {
+        std::cout << "error: simple_llama_inference_state_new" << std::endl;
+        goto cleanup;
+    }
+
+    status = simple_llama_set_prompt(sllm, inference_state, prompt.c_str());
+    if (status != SIMPLE_LLAMA_STATUS_SUCCESS) {
+        std::cout << "error: simple_llama_set_prompt: " << status << std::endl;
+        goto cleanup;
+    }
+
+    simple_llama_inference_status inference_status;
+
+    std::cout << "size of char: " << sizeof(char) << std::endl;
+    std::cout << "input prompt token count " << simple_llama_inference_state_get_input_prompt_token_count(sllm, inference_state) << std::endl;
+    do {
+        llama_token token;
+        inference_status = simple_llama_inference_state_get_next_token(sllm, inference_state, &token);
+
+        if (inference_status != SIMPLE_LLAMA_INFERENCE_STATUS_SUCCESS) {
+            break;
+        }
+
+        // Code copied/pasted from common.cpp
+        std::vector<char> result(8, 0);
+        int n_tokens = simple_llama_token_to_piece(sllm, token, result.data(), result.size());
+        if (n_tokens < 0) {
+            result.resize(-n_tokens);
+            n_tokens = simple_llama_token_to_piece(sllm, token, result.data(), result.size());
+            if (n_tokens < 0) {
+                // This should not happen
+                std::cerr << "simple_llama_token_to_piece returned an error." << std::endl;
+                return 1;
+            }
+        } else {
+            result.resize(n_tokens);
+        }
+
+        // Note: here result might hold a truncated multibyte character.
+        // We can check the length of the character using utf8_len.
+        // If the result is greater than n_tokens we should wait before yielding
+        // the token.
+
+        if (std::string(result.data(), result.size()) == "\n") {
+            // for AI Rakuten
+            inference_status = SIMPLE_LLAMA_INFERENCE_STATUS_DONE;
+        } else {
+            std::cout << "generated token (#" << n_tokens << ")'" << std::string(result.data(), result.size()) << "'" << std::endl;
+            std::cout << "utf8_len() => " << utf8_len(result[0]) << std::endl;
+            for (size_t i = 0; i < result.size(); i++) {
+                printf("%02X ", (uint8_t)(result[i]));
+            }
+            printf("\n");
+            acc += std::string(result.data(), result.size());
+            std::cout << "acc: " << acc << "\n\n" << std::endl;
+        }
+    } while(inference_status == SIMPLE_LLAMA_INFERENCE_STATUS_SUCCESS);
 
     std::cout << "\n\n---------------- prompt\n" << prompt << "\n----------------\n" << std::endl;
     std::cout << "\n\n---------------- answer\n" << acc << "\n----------------\n" << std::endl;
+
+cleanup:
+    if (inference_state != nullptr) {
+        simple_llama_inference_state_free(inference_state);
+    }
 
     simple_llama_free(sllm);
 
