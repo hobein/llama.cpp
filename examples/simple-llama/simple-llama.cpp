@@ -41,11 +41,11 @@ static size_t utf8_len(char src) {
 }
 
 int main(int argc, char ** argv) {
-    std::string model, prompt;
+    std::string model_filename, prompt;
 
     // ELYZA
     {
-        model = "/tmp/test/ELYZA-japanese-Llama-2-7b-fast-q4_K_M.gguf";
+        model_filename = "/tmp/test/ELYZA-japanese-Llama-2-7b-fast-q4_K_M.gguf";
         prompt = "[INST] <<SYS>>\n"
             "あなたは誠実で優秀な日本人のアシスタントです。\n"
             "<</SYS>>\n\n"
@@ -70,7 +70,7 @@ int main(int argc, char ** argv) {
     // calm2-7b-chat
     {
         // https://huggingface.co/cyberagent/calm2-7b-chat
-        model = "/tmp/test/ggml-model-f32-q5_k_m.gguf";
+        model_filename = "/tmp/test/ggml-model-f32-q5_k_m.gguf";
         // prompt = "USER: AIによって私達の暮らしはどのように変わりますか？\n"
         //     "ASSISTANT: ";
         prompt = "USER: こんにちは。\n"
@@ -81,7 +81,7 @@ int main(int argc, char ** argv) {
 
     // RakutenAI-7B-chat-q8_0
     {
-        model = "/tmp/test/RakutenAI-7B-chat-q8_0.gguf";
+        model_filename = "/tmp/test/RakutenAI-7B-chat-q8_0.gguf";
         prompt = "USER: こんにちは。\nASSISTANT: ";
 
         prompt = "";
@@ -100,7 +100,7 @@ int main(int argc, char ** argv) {
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--model", strlen("--model"))) {
             if (i + 1 < argc) {
-                model = std::string(argv[i + 1]);
+                model_filename = std::string(argv[i + 1]);
                 i++;
             }
         }
@@ -121,6 +121,20 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(GGML_NUMA_STRATEGY_DISABLED);
 
+    llama_model_params model_params;
+    model_params.n_gpu_layers = 0;
+    model_params.split_mode = LLAMA_SPLIT_MODE_NONE;
+    model_params.main_gpu = 0;
+    model_params.vocab_only = false;
+    model_params.use_mmap = true;
+    model_params.check_tensors = true;
+
+    llama_model* model = llama_load_model_from_file(model_filename.c_str(), model_params);
+    if (model == nullptr) {
+        std::cout << "error: llama_load_model_from_file" << std::endl;
+        return 1;
+    }
+
     struct simple_llama* sllm = simple_llama_new();
     struct simple_llama_inference_state* inference_state = nullptr;
 
@@ -131,7 +145,7 @@ int main(int argc, char ** argv) {
 
     std::string acc = "";
 
-    auto status = simple_llama_init_model(sllm, model.c_str());
+    auto status = simple_llama_init_model(sllm, model);
     if (status != SIMPLE_LLAMA_STATUS_SUCCESS) {
         std::cout << "error: simple_llama_init_model: " << status << std::endl;
         goto cleanup;
