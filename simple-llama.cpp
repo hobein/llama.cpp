@@ -127,6 +127,7 @@ simple_llama_status_t simple_llama_set_prompt(struct simple_llama* simple_llm, s
     }
 
     std::cout << "\nsimple_llama_set_prompt:\n'" << prompt << "'" << std::endl;
+    std::cout << "simple_llama_set_prompt: state->ctx_sampling: " << (uintptr_t)state->ctx_sampling << std::endl;
 
     if (state->ctx_sampling == nullptr) {
         state->ctx_sampling = llama_sampling_init(simple_llm->params.sparams);
@@ -140,7 +141,7 @@ simple_llama_status_t simple_llama_set_prompt(struct simple_llama* simple_llm, s
     }
 
     // reset state
-    state->embd = {};
+    state->embd.clear();
     state->n_remain = -1;   // infinite generation
     state->n_consumed = 0;
     state->n_past = 0;
@@ -419,23 +420,6 @@ static std::vector<std::pair<std::string, std::string>> _map_roles(
     return output;
 }
 
-/*
-def _format_llama2(
-    system_message: str, messages: List[Tuple[str, Optional[str]]], sep: str, sep2: str
-) -> str:
-    """Format the prompt with the llama2 style."""
-    seps = [sep, sep2]
-    ret = system_message + sep
-    for i, (role, message) in enumerate(messages):
-        if system_message and i == 0:
-            m = message or ""
-            ret += m + seps[i % 2]
-        elif message:
-            ret += role + message + " " + seps[i % 2]
-        else:
-            ret += role + " "
-    return ret
-*/
 static std::string _format_llama2(
     const std::string& system_message,
     const std::vector<std::pair<std::string, std::string>>& _messages,
