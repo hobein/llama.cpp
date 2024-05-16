@@ -51,7 +51,7 @@ extern "C" {
     struct simple_llama_inference_state;
 
     LLAMA_API struct simple_llama* simple_llama_new();
-    LLAMA_API simple_llama_status_t simple_llama_init_model(struct simple_llama*, const char* model_file);
+    LLAMA_API simple_llama_status_t simple_llama_init_model(struct simple_llama*, struct llama_model*);
     LLAMA_API void simple_llama_free(struct simple_llama*);
 
     LLAMA_API simple_llama_status_t simple_llama_set_prompt(struct simple_llama*, struct simple_llama_inference_state*, const char* prompt);

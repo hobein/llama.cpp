@@ -8,7 +8,6 @@
 #include "simple-llama.h"
 #include "common/common.h"
 
-static std::tuple<struct llama_model *, struct llama_context *, simple_llama_status_t> simple_llama_init_from_gpt_params(gpt_params & params);
 static std::string format_rakuten_ai_chat(
     const simple_llama_chat_message_t* messages, // array of message
     size_t length
@@ -31,8 +30,9 @@ static std::string _format_llama2(
 
 struct simple_llama {
     gpt_params params;
-    llama_model * model;
     llama_context * ctx;
+    // not the owner of the model
+    llama_model * model;
 };
 
 // simple_llama_inference_state keep track of the inference state
@@ -49,13 +49,13 @@ struct simple_llama_inference_state {
 struct simple_llama* simple_llama_new() {
     simple_llama * simple_llm = new simple_llama;
 
-    simple_llm->model = nullptr;
     simple_llm->ctx = nullptr;
+    simple_llm->model = nullptr;
 
     return simple_llm;
 }
 
-simple_llama_status_t simple_llama_init_model(struct simple_llama* simple_llm, const char* model_file) {
+simple_llama_status_t simple_llama_init_model(struct simple_llama* simple_llm, struct llama_model* model) {
     // forced settings
     simple_llm->params.logits_all = false;
     simple_llm->params.embedding = false;
@@ -74,12 +74,49 @@ simple_llama_status_t simple_llama_init_model(struct simple_llama* simple_llm, c
 
     simple_llm->params.sparams.cfg_scale = 1.f;
 
-    simple_llm->params.model = model_file;
+    auto& params = simple_llm->params;
+    auto cparams = llama_context_params_from_gpt_params(params);
 
-    simple_llama_status_t status;
-    std::tie(simple_llm->model, simple_llm->ctx, status) = simple_llama_init_from_gpt_params(simple_llm->params);
+    llama_context * lctx = llama_new_context_with_model(model, cparams);
+    if (lctx == NULL) {
+        return SIMPLE_LLAMA_STATUS_CONTEXT_CREATION_FAILURE;
+    }
 
-    return status;
+    for (unsigned int i = 0; i < params.lora_adapter.size(); ++i) {
+        const std::string & lora_adapter = std::get<0>(params.lora_adapter[i]);
+        float lora_scale = std::get<1>(params.lora_adapter[i]);
+        int err = llama_model_apply_lora_from_file(model,
+                                             lora_adapter.c_str(),
+                                             lora_scale,
+                                             ((i > 0) || params.lora_base.empty())
+                                                ? NULL
+                                                : params.lora_base.c_str(),
+                                             params.n_threads);
+        if (err != 0) {
+            fprintf(stderr, "%s: error: failed to apply lora adapter\n", __func__);
+            llama_free(lctx);
+            return SIMPLE_LLAMA_STATUS_LORA_FAILURE;
+        }
+    }
+
+    if (params.ignore_eos) {
+        params.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
+    }
+
+    if (params.warmup) {
+        LOG("warming up the model with an empty run\n");
+
+        std::vector<llama_token> tmp = { llama_token_bos(model), llama_token_eos(model), };
+        llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));
+        llama_kv_cache_clear(lctx);
+        llama_synchronize(lctx);
+        llama_reset_timings(lctx);
+    }
+
+    simple_llm->ctx = lctx;
+    simple_llm->model = model;
+
+    return SIMPLE_LLAMA_STATUS_SUCCESS;
 }
 
 void simple_llama_free(struct simple_llama* simple_llm) {
@@ -92,11 +129,7 @@ void simple_llama_free(struct simple_llama* simple_llm) {
         simple_llm->ctx = nullptr;
     }
 
-    if (simple_llm->model != nullptr) {
-        llama_free_model(simple_llm->model);
-        simple_llm->model = nullptr;
-    }
-
+    simple_llm->model = nullptr;
 
     delete simple_llm;
 }
@@ -281,63 +314,6 @@ simple_llama_inference_status_t simple_llama_inference_state_get_next_token(stru
 int32_t simple_llama_token_to_piece(struct simple_llama* simple_llm, llama_token token, char * buf, int32_t length) {
     return llama_token_to_piece(simple_llm->model, token, buf, length, true);
 }
-
-static std::tuple<struct llama_model *, struct llama_context *, simple_llama_status_t> simple_llama_init_from_gpt_params(gpt_params & params) {
-    auto mparams = llama_model_params_from_gpt_params(params);
-
-    llama_model * model = nullptr;
-
-    model = llama_load_model_from_file(params.model.c_str(), mparams);
-
-    if (model == NULL) {
-        fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
-        return std::make_tuple(nullptr, nullptr, SIMPLE_LLAMA_STATUS_LOAD_MODEL_FAILURE);
-    }
-
-    auto cparams = llama_context_params_from_gpt_params(params);
-
-    llama_context * lctx = llama_new_context_with_model(model, cparams);
-    if (lctx == NULL) {
-        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
-        llama_free_model(model);
-        return std::make_tuple(nullptr, nullptr, SIMPLE_LLAMA_STATUS_CONTEXT_CREATION_FAILURE);
-    }
-
-    for (unsigned int i = 0; i < params.lora_adapter.size(); ++i) {
-        const std::string & lora_adapter = std::get<0>(params.lora_adapter[i]);
-        float lora_scale = std::get<1>(params.lora_adapter[i]);
-        int err = llama_model_apply_lora_from_file(model,
-                                             lora_adapter.c_str(),
-                                             lora_scale,
-                                             ((i > 0) || params.lora_base.empty())
-                                                ? NULL
-                                                : params.lora_base.c_str(),
-                                             params.n_threads);
-        if (err != 0) {
-            fprintf(stderr, "%s: error: failed to apply lora adapter\n", __func__);
-            llama_free(lctx);
-            llama_free_model(model);
-            return std::make_tuple(nullptr, nullptr, SIMPLE_LLAMA_STATUS_LORA_FAILURE);
-        }
-    }
-
-    if (params.ignore_eos) {
-        params.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
-    }
-
-    if (params.warmup) {
-        LOG("warming up the model with an empty run\n");
-
-        std::vector<llama_token> tmp = { llama_token_bos(model), llama_token_eos(model), };
-        llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));
-        llama_kv_cache_clear(lctx);
-        llama_synchronize(lctx);
-        llama_reset_timings(lctx);
-    }
-
-    return std::make_tuple(model, lctx, SIMPLE_LLAMA_STATUS_SUCCESS);
-}
-
 
 static std::string format_rakuten_ai_chat(
     const simple_llama_chat_message_t* messages, // array of message
