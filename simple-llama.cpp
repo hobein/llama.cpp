@@ -153,6 +153,9 @@ simple_llama_status_t simple_llama_set_prompt(struct simple_llama* simple_llm, s
         return SIMPLE_LLAMA_STATUS_PROMPT_TOO_LONG;
     }
 
+    // clear the entire KV cache
+    llama_kv_cache_clear(simple_llm->ctx);
+
     return SIMPLE_LLAMA_STATUS_SUCCESS;
 }
 
